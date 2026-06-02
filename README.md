@@ -1,30 +1,38 @@
-# VRF Diagnostic Desktop
+# VRF-ML-Monitoring
 
-This project runs the existing Flask + React VRF dashboard inside an Electron desktop app.
+An intelligent VRF (Variable Refrigerant Flow) monitoring platform that combines Machine Learning, Real-Time Data Visualization, Fault Detection, Energy Optimization, and Protocol Analysis.
 
-## Run The Desktop App
+## Features
 
-Install Python dependencies from the project root:
+- Real-time VRF system monitoring
+- Machine Learning based anomaly detection
+- Fault classification and diagnosis
+- Energy consumption optimization
+- Interactive React dashboard
+- Electron desktop application
+- Historical data analysis
+- Protocol stream monitoring
+- Fault injection and ML retraining
+- Flask backend with REST APIs
 
-```bash
-pip install -r requirements.txt
-```
+## Tech Stack
 
-Install frontend and desktop dependencies:
+- Python
+- Flask
+- Scikit-Learn
+- React.js
+- Electron.js
+- JavaScript
+- SQLite/MySQL
+- Recharts
 
-```bash
-cd vrf_react
-npm install
-```
+## Desktop Application
 
-Start the desktop app in development mode:
+The project supports both:
 
-```bash
-npm run desktop
-```
+- Web Dashboard
+- Electron Desktop Application
 
-The Electron app starts the Flask backend quietly, opens the React dashboard in a desktop window, and exposes serial-port access through the COM Port controls in the Live Monitor screen.
+## Status
 
-## Serial Port Behavior
-
-The COM Port dropdown is populated dynamically with `serialport` from the user's operating system. The polling frequency control is clamped from 2 seconds to 30 seconds. Serial data is read through Electron and shown in the Live Monitor controls after connecting.
+✅ Stable Release: `v1.0-electron-working`
