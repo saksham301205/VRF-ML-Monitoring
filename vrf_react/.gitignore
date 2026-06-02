@@ -1,0 +1,18 @@
+# Node
+node_modules/
+dist/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Logs
+backend.err.log
+backend.out.log
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/

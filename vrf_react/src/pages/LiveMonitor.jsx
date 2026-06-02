@@ -5,7 +5,7 @@ import Controls from "../components/Controls";
 const MAX_CHART = 60;
 
 export default function LiveMonitor({ data, history, streaming, ready,
-  onInjectFault, onClearFault, onSetSetpoint, onRetrain, onToggleStream, onExportCSV }) {
+  serial, onInjectFault, onClearFault, onSetSetpoint, onRetrain, onToggleStream, onExportCSV }) {
 
   const [chartData, setChartData] = useState({ temp:[], pressure:[], power:[], anomaly:[] });
 
@@ -51,6 +51,7 @@ export default function LiveMonitor({ data, history, streaming, ready,
 
       <Controls
         streaming={streaming}
+        serial={serial}
         onInjectFault={onInjectFault}
         onClearFault={onClearFault}
         onSetSetpoint={onSetSetpoint}

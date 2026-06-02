@@ -299,5 +299,6 @@ def db_fault_distribution():
 
 if __name__ == "__main__":
     print("VRF Dashboard Running: http://localhost:5000")
-    threading.Timer(1.5, lambda: webbrowser.open("http://localhost:5000")).start()
+    if os.environ.get("VRF_DISABLE_BROWSER_OPEN") != "1":
+        threading.Timer(1.5, lambda: webbrowser.open("http://localhost:5000")).start()
     socketio.run(app, host="0.0.0.0", port=5000, debug=False, allow_unsafe_werkzeug=True)

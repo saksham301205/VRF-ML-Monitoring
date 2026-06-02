@@ -7,6 +7,7 @@ import LiveMonitor from "./pages/LiveMonitor";
 import ProtocolStream from "./pages/ProtocolStream";
 import History from "./pages/History";
 import Analytics from "./pages/Analytics";
+import useSerialConnection from "./hooks/useSerialConnection";
 import "./index.css";
 
 const API = "http://localhost:5000";
@@ -25,6 +26,7 @@ export default function App() {
   const [streaming, setStreaming] = useState(true);
   const [sidebarW, setSidebarW]   = useState(268);
   const [ready, setReady]         = useState(false);
+  const serial                    = useSerialConnection();
   const dragging = useRef(false);
   const startX   = useRef(0);
   const startW   = useRef(268);
@@ -83,6 +85,7 @@ export default function App() {
 
   const liveProps = {
     data, history, streaming, ready,
+    serial,
     onInjectFault: injectFault, onClearFault: clearFault,
     onSetSetpoint: setSetpoint, onRetrain: retrain,
     onToggleStream: toggleStream, onExportCSV: exportCSV,
