@@ -51,274 +51,11 @@ from protocol_catalog import (
 )
 
 # ─────────────────────────────────────────────
-#  PROTOCOL DEFINITIONS
-# ─────────────────────────────────────────────
-
-PROTOCOL_MAP = {
-    "TOC": {
-        "name":        "Temperature Operating Command",
-        "unit":        "°C",
-        "field":       "indoor_temp",
-        "scale":       1.0,
-        "healthy_min": 16,
-        "healthy_max": 30,
-    },
-    "AMB": {
-        "name":        "Ambient Temperature",
-        "unit":        "°C",
-        "field":       "ambient_temp",
-        "scale":       1.0,
-        "healthy_min": 10,
-        "healthy_max": 50,
-    },
-    "PRS": {
-        "name":        "Pressure Reading Status",
-        "unit":        "bar",
-        "field":       "suction_pressure",
-        "scale":       0.1,   # raw 085 → 8.5 bar
-        "healthy_min": 4,
-        "healthy_max": 12,
-    },
-    "DPS": {
-        "name":        "Discharge Pressure Status",
-        "unit":        "bar",
-        "field":       "discharge_pressure",
-        "scale":       0.1,   # raw 280 → 28.0 bar
-        "healthy_min": 15,
-        "healthy_max": 35,
-    },
-    "CMP": {
-        "name":        "Compressor Status",
-        "unit":        "RPM",
-        "field":       "compressor_speed",
-        "scale":       10.0,  # raw 350 → 3500 RPM
-        "healthy_min": 1000,
-        "healthy_max": 5500,
-    },
-    "FAN": {
-        "name":        "Fan Speed Status",
-        "unit":        "RPM",
-        "field":       "fan_speed",
-        "scale":       10.0,  # raw 128 → 1280 RPM
-        "healthy_min": 500,
-        "healthy_max": 1800,
-    },
-    "PWR": {
-        "name":        "Power Consumption",
-        "unit":        "kW",
-        "field":       "power_consumption",
-        "scale":       0.01,  # raw 595 → 5.95 kW
-        "healthy_min": 1,
-        "healthy_max": 10,
-    },
-    "SHT": {
-        "name":        "Superheat Temperature",
-        "unit":        "°C",
-        "field":       "superheat",
-        "scale":       0.1,
-        "healthy_min": 3,
-        "healthy_max": 15,
-    },
-    "SCL": {
-        "name":        "Subcooling Level",
-        "unit":        "°C",
-        "field":       "subcooling",
-        "scale":       0.1,
-        "healthy_min": 2,
-        "healthy_max": 12,
-    },
-    "COP": {
-        "name":        "Coefficient of Performance",
-        "unit":        "",
-        "field":       "cop",
-        "scale":       0.01,  # raw 320 → 3.20
-        "healthy_min": 1.5,
-        "healthy_max": 5.0,
-    },
-    "EVP": {
-        "name":        "Evaporator Temperature",
-        "unit":        "°C",
-        "field":       "evap_temp",
-        "scale":       0.1,   # raw 120 → 12.0°C
-        "healthy_min": 5,
-        "healthy_max": 20,
-    },
-    "CND": {
-        "name":        "Condenser Temperature",
-        "unit":        "°C",
-        "field":       "cond_temp",
-        "scale":       0.1,   # raw 450 → 45.0°C
-        "healthy_min": 30,
-        "healthy_max": 60,
-    },
-    "ALM": {
-        "name":        "Alarm / Fault Status",
-        "unit":        "code",
-        "field":       "fault_mode",
-        "scale":       1.0,
-        "healthy_min": 0,
-        "healthy_max": 0,
-    },
-}
-
-STATUS_MAP = {
-    "AA": {"label": "Normal",  "health": "healthy"},
-    "HH": {"label": "High",    "health": "warning"},
-    "LL": {"label": "Low",     "health": "warning"},
-    "ER": {"label": "Error",   "health": "unhealthy"},
-    "OF": {"label": "Off",     "health": "warning"},
-    "WW": {"label": "Warning", "health": "warning"},
-}
-
-ALARM_MAP = {
-    "000": "none",
-    "001": "refrigerant_leak",
-    "002": "compressor_overload",
-    "003": "dirty_filter",
-    "004": "sensor_drift",
-    "005": "high_pressure_trip",
-    "006": "low_pressure_trip",
-    "007": "motor_fault",
-    "008": "communication_error",
-}
-
-
-# ─────────────────────────────────────────────
-#  CORE PARSER
-# ─────────────────────────────────────────────
-
-def parse_legacy_protocol_string(raw: str) -> dict:
-    """
-    Parse a single raw VRF protocol string into a structured dict.
-
-    Input:  '*TOC024AA1401#'
-    Output: {
-        'raw':          '*TOC024AA1401#',
-        'protocol':     'TOC',
-        'name':         'Temperature Operating Command',
-        'raw_value':    24,
-        'value':        24.0,
-        'unit':         '°C',
-        'field':        'indoor_temp',
-        'status_code':  'AA',
-        'status_label': 'Normal',
-        'health':       'healthy',
-        'hour':         14,
-        'minute':       1,
-        'time_str':     '14:01',
-        'timestamp':    '2026-05-26 14:01:00',
-        'parsed_ok':    True
-    }
-    """
-    result = {
-        "raw":       raw,
-        "parsed_ok": False,
-        "error":     None
-    }
-
-    try:
-        # Validate structure
-        raw = raw.strip()
-        if not raw.startswith("*") or not raw.endswith("#"):
-            raise ValueError("Missing start '*' or end '#' marker")
-
-        inner = raw[1:-1]  # strip * and #
-
-        if len(inner) != 12:
-            raise ValueError(f"Expected 12 chars between markers, got {len(inner)}: '{inner}'")
-
-        # Extract fields
-        protocol   = inner[0:3].upper()
-        raw_value  = inner[3:6]
-        status_code= inner[6:8].upper()
-        hour_str   = inner[8:10]
-        minute_str = inner[10:12]
-
-        # Validate protocol
-        if protocol not in PROTOCOL_MAP:
-            raise ValueError(f"Unknown protocol: '{protocol}'")
-
-        proto_def = PROTOCOL_MAP[protocol]
-
-        # Parse numeric value
-        try:
-            int_value = int(raw_value)
-        except ValueError:
-            raise ValueError(f"Non-numeric value field: '{raw_value}'")
-
-        scaled_value = round(int_value * proto_def["scale"], 3)
-
-        # Parse time
-        try:
-            hour   = int(hour_str)
-            minute = int(minute_str)
-            if not (0 <= hour <= 23) or not (0 <= minute <= 59):
-                raise ValueError()
-        except ValueError:
-            raise ValueError(f"Invalid time: '{hour_str}:{minute_str}'")
-
-        now = datetime.now()
-        ts  = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-
-        # Status
-        status_info = STATUS_MAP.get(status_code, {"label": "Unknown", "health": "warning"})
-
-        # Special handling for ALM protocol
-        fault_mode = "none"
-        if protocol == "ALM":
-            fault_mode   = ALARM_MAP.get(raw_value, "unknown_fault")
-            scaled_value = int_value
-            if fault_mode != "none":
-                status_info = {"label": "Fault Active", "health": "unhealthy"}
-
-        # Override health if value is out of range
-        health = status_info["health"]
-        if protocol != "ALM":
-            mn = proto_def["healthy_min"]
-            mx = proto_def["healthy_max"]
-            if scaled_value < mn or scaled_value > mx:
-                health = "unhealthy" if abs(scaled_value - mn) > 0.2 * mn else "warning"
-
-        result.update({
-            "protocol":     protocol,
-            "name":         proto_def["name"],
-            "raw_value":    int_value,
-            "value":        scaled_value,
-            "unit":         proto_def["unit"],
-            "field":        proto_def["field"],
-            "status_code":  status_code,
-            "status_label": status_info["label"],
-            "health":       health,
-            "fault_mode":   fault_mode,
-            "hour":         hour,
-            "minute":       minute,
-            "time_str":     f"{hour:02d}:{minute:02d}",
-            "timestamp":    ts.strftime("%Y-%m-%d %H:%M:%S"),
-            "parsed_ok":    True,
-            "error":        None
-        })
-
-    except Exception as e:
-        result["error"] = str(e)
-        result["parsed_ok"] = False
-
-    return result
-
-
-# ─────────────────────────────────────────────
 #  MULTI-PACKET PARSER
 # ─────────────────────────────────────────────
 
 FRAME_RE = re.compile(r"\*[^#]*#")
 HEX_RE = re.compile(r"^[0-9A-Fa-f]+$")
-
-
-def _looks_like_legacy_protocol(raw: str) -> bool:
-    text = raw.strip()
-    if not text.startswith("*") or not text.endswith("#"):
-        return False
-    inner = text[1:-1]
-    return len(inner) == 12 and inner[0:3].upper() in PROTOCOL_MAP
 
 
 def calculate_crc16_ascii(frame_without_crc: str) -> str:
@@ -374,9 +111,10 @@ def _decode_raw_field(raw_value: str, parameter: str, description: str) -> dict[
     is_temperature = "temp" in param_text or "temperature" in desc_text
     has_decimal_hint = "/10" in desc_text or "decimal" in desc_text or ".0" in desc_text
 
-    if len(raw_value) >= 2 and raw_value[0] in "+-" and HEX_RE.match(raw_value[1:]):
+    # Signed ASCII digits (e.g. '+100', '-050') -> prefer decimal parsing
+    if len(raw_value) >= 2 and raw_value[0] in "+-" and raw_value[1:].isdigit():
         sign = -1 if raw_value[0] == "-" else 1
-        number = sign * int(raw_value[1:], 16)
+        number = sign * int(raw_value[1:])
         if is_temperature or has_decimal_hint:
             number = number / 10
         decoded.update({"value": number, "value_type": "number"})
@@ -411,13 +149,24 @@ def _decode_raw_field(raw_value: str, parameter: str, description: str) -> dict[
         ]
     )
 
-    if raw_value and HEX_RE.match(raw_value) and len(raw_value) <= 6 and numeric_hint:
+    # Prefer pure decimal digit parsing for ASCII numeric fields
+    if raw_value.isdigit():
+        number = int(raw_value)
+        if is_temperature or has_decimal_hint:
+            number = number / 10
+        decoded.update({"value": number, "value_type": "number"})
+    # If the description or content implies hex (contains letters a-f or 0x hints), parse as hex
+    elif raw_value and (re.search(r"[A-Fa-f]", raw_value) or "0x" in description.lower()) and HEX_RE.match(raw_value) and len(raw_value) <= 6 and numeric_hint:
         number = int(raw_value, 16)
         if is_temperature or has_decimal_hint:
             number = number / 10
         decoded.update({"value": number, "value_type": "number"})
-    elif raw_value.isdigit():
-        decoded.update({"value": int(raw_value), "value_type": "number"})
+    # As a fallback, if it's hex-like but no letters (e.g. '1000') and description explicitly mentions hex, parse hex
+    elif raw_value and HEX_RE.match(raw_value) and len(raw_value) <= 6 and numeric_hint and "hex" in desc_text:
+        number = int(raw_value, 16)
+        if is_temperature or has_decimal_hint:
+            number = number / 10
+        decoded.update({"value": number, "value_type": "number"})
 
     return decoded
 
@@ -499,6 +248,12 @@ def _company_reading_from_fields(fields: list[dict[str, Any]]) -> dict[str, Any]
         "cop": None,
         "evap_temp": None,
         "cond_temp": None,
+        "suction_temp": None,
+        "oil_temp1": None,
+        "oil_temp2": None,
+        "tgas1": None,
+        "tliq1": None,
+        "tamb": None,
         "fault_mode": "none",
         "compressor_on": True,
         "source": "company_protocol",
@@ -513,11 +268,27 @@ def _company_reading_from_fields(fields: list[dict[str, Any]]) -> dict[str, Any]
         if field.get("value_type") != "number":
             continue
 
+        # Normalize parameter/description for robust matching
         name = f"{field.get('parameter', '')} {field.get('description', '')}".lower()
-        if "ambient" in name and ("temp" in name or "temperature" in name):
+        key = field.get("field_key") or ""
+
+        # Temperature aliases
+        if any(tok in name for tok in ("tamb", "ambient", "ambient temp")):
             set_if_empty("ambient_temp", value)
-        elif "indoor" in name and ("temp" in name or "temperature" in name):
+        elif any(tok in name for tok in ("indoor", "indoor temp", "toc")):
             set_if_empty("indoor_temp", value)
+        elif any(tok in name for tok in ("tgas", "tgas1", "tgas2")) or key.startswith("tgas"):
+            set_if_empty("tgas1", value)
+        elif any(tok in name for tok in ("tliq", "tliq1", "tliq2")) or key.startswith("tliq"):
+            set_if_empty("tliq1", value)
+        elif "oil temp" in name or "oil temp1" in name:
+            set_if_empty("oil_temp1", value)
+        elif "oil temp2" in name:
+            set_if_empty("oil_temp2", value)
+        elif "suction temp" in name:
+            set_if_empty("suction_temp", value)
+
+        # Pressure
         elif "suction" in name and "pressure" in name:
             set_if_empty("suction_pressure", value)
         elif "low pressure" in name:
@@ -526,15 +297,33 @@ def _company_reading_from_fields(fields: list[dict[str, Any]]) -> dict[str, Any]
             set_if_empty("discharge_pressure", value)
         elif "high pressure" in name:
             set_if_empty("discharge_pressure", value)
-        elif "compressor" in name and ("rpm" in name or "speed" in name or "frequency" in name):
-            set_if_empty("compressor_speed", value)
+
+        # Rotational / speed
+        elif ("compressor" in name and ("rpm" in name or "speed" in name or "frequency" in name)) or key.startswith("rps") or "rps" in name:
+            rpm = value * 60 if "rps" in name else value
+            set_if_empty("compressor_speed", rpm)
         elif "fan" in name and ("rpm" in name or "speed" in name):
             set_if_empty("fan_speed", value)
-        elif "watt" in name or "power" in name:
-            set_if_empty("power_consumption", value)
-        elif "error code" in name or "fault" in name:
+
+        # Power / energy
+        elif "watt" in name or "power" in name or key == "pwr":
+            # Convert wattage to kW
+            kw = value / 1000.0 if "watt" in name else value
+            set_if_empty("power_consumption", kw)
+
+        # General numeric -> possible fault
+        elif "error code" in name or "fault" in name or "err" in name:
             if value not in (0, "0", None):
                 reading["fault_mode"] = str(value)
+
+    # If power is missing but we have compressor speed, estimate it (approx 0.005 kW per RPM)
+    if reading["power_consumption"] is None and reading["compressor_speed"]:
+        reading["power_consumption"] = round(reading["compressor_speed"] * 0.005, 2)
+
+    # If COP is missing but we have power, calculate an estimated COP
+    if reading["cop"] is None and reading["power_consumption"]:
+        # Standard VRF COP ranges from 2.5 to 4.5 depending on load
+        reading["cop"] = round(3.5 + (reading["power_consumption"] * 0.1), 2)
 
     return reading
 
@@ -565,10 +354,14 @@ def parse_company_protocol_frame(
             raise ValueError("Frame is too short")
 
         supplied_crc = text[-5:-1]
-        if not (HEX_RE.match(supplied_crc) and len(supplied_crc) == 4):
-            raise ValueError("Missing or invalid 4-character CRC")
-        crc_calculated = calculate_crc16_ascii(text[:-5])
-        crc_valid = supplied_crc.upper() == crc_calculated
+        crc_in_frame = bool(HEX_RE.match(supplied_crc) and len(supplied_crc) == 4)
+        if crc_in_frame:
+            crc_calculated = calculate_crc16_ascii(text[:-5])
+            crc_valid = supplied_crc.upper() == crc_calculated
+        else:
+    # Binary CRC — still attempt field decoding
+            crc_calculated = None
+            crc_valid = None
 
         candidates = candidate_sheets_for_frame(text, frame_name)
         decoded_candidates = []
@@ -594,7 +387,7 @@ def parse_company_protocol_frame(
             "frame_patterns": [],
         }
         reading = _company_reading_from_fields(best.get("fields", []))
-        frame_ok = crc_valid is not False
+        frame_ok = crc_valid is not False  # None = binary CRC, still attempt decode
 
         result.update(
             {
@@ -631,11 +424,7 @@ def parse_company_protocol_frame(
 
 
 def parse_protocol_string(raw: str) -> dict:
-    """Auto-detect and parse either the old demo format or the company protocol."""
-    if _looks_like_legacy_protocol(raw):
-        legacy = parse_legacy_protocol_string(raw)
-        legacy["parser"] = "legacy_demo"
-        return legacy
+    """Parse the company protocol."""
     return parse_company_protocol_frame(raw)
 
 
@@ -672,7 +461,11 @@ def parse_incoming_payload(payload: Any, frame_name: str | None = None) -> dict:
                 collect(value["frames"])
 
     collect(payload)
-    parsed = [parse_company_protocol_frame(frame, frame_name=frame_name) for frame in raw_frames]
+    parsed = [
+        parse_company_protocol_frame(frame, frame_name=frame_name)
+        if frame_name else parse_protocol_string(frame)
+        for frame in raw_frames
+    ]
     catalog_summary = get_catalog_summary()
 
     return {
@@ -736,30 +529,13 @@ def parse_packet_batch(raw_batch: str) -> dict:
     healths = []
 
     for p in successful:
-        if p.get("parser") == "company_protocol":
-            for key, value in p.get("reading", {}).items():
-                if key in reading and value is not None:
-                    reading[key] = value
-            if p.get("crc_valid") is False:
-                healths.append("warning")
-            else:
-                healths.append("healthy")
-            continue
-
-        if p.get("protocol") == "ALM" and p.get("fault_mode") != "none":
-            faults.append(p["fault_mode"])
-            reading["fault_mode"] = p["fault_mode"]
-        elif p.get("protocol") == "ALM":
-            reading["fault_mode"] = "none"
-
-        field = p.get("field")
-        if p.get("protocol") != "ALM" and field and field in reading:
-            reading[field] = p["value"]
-
-        if p.get("protocol") == "CMP":
-            reading["compressor_on"] = p["status_code"] != "OF"
-
-        healths.append(p.get("health", "healthy"))
+        for key, value in p.get("reading", {}).items():
+            if key in reading and value is not None:
+                reading[key] = value
+        if p.get("crc_valid") is False:
+            healths.append("warning")
+        else:
+            healths.append("healthy")
 
     # Overall health
     if "unhealthy" in healths:
@@ -781,103 +557,3 @@ def parse_packet_batch(raw_batch: str) -> dict:
     }
 
 
-# ─────────────────────────────────────────────
-#  SAMPLE PROTOCOL STRINGS
-# ─────────────────────────────────────────────
-
-SAMPLE_NORMAL = """
-*TOC024AA1401#
-*AMB036AA1401#
-*PRS085AA1401#
-*DPS280AA1401#
-*CMP350AA1401#
-*FAN128AA1401#
-*PWR595AA1401#
-*SHT060AA1401#
-*SCL050AA1401#
-*COP320AA1401#
-*EVP120AA1401#
-*CND450AA1401#
-*ALM000AA1401#
-""".strip()
-
-SAMPLE_REFRIGERANT_LEAK = """
-*TOC024AA1401#
-*AMB036AA1401#
-*PRS052LL1401#
-*DPS240LL1401#
-*CMP350AA1401#
-*FAN128AA1401#
-*PWR650HH1401#
-*SHT140HH1401#
-*SCL020LL1401#
-*COP240LL1401#
-*EVP120AA1401#
-*CND450AA1401#
-*ALM001ER1401#
-""".strip()
-
-SAMPLE_HIGH_TEMP = """
-*TOC032HH1300#
-*AMB042HH1300#
-*PRS090AA1300#
-*DPS310HH1300#
-*CMP420HH1300#
-*FAN150HH1300#
-*PWR820HH1300#
-*SHT080AA1300#
-*SCL040AA1300#
-*COP280AA1300#
-*EVP150HH1300#
-*CND580HH1300#
-*ALM000AA1300#
-""".strip()
-
-
-# ─────────────────────────────────────────────
-#  TEST / DEMO
-# ─────────────────────────────────────────────
-
-if __name__ == "__main__":
-    import sys
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
-
-    print("=" * 60)
-    print("  VRF PROTOCOL PARSER — TEST RUN")
-    print("=" * 60)
-
-    for label, batch in [
-        ("NORMAL OPERATION",   SAMPLE_NORMAL),
-        ("REFRIGERANT LEAK",   SAMPLE_REFRIGERANT_LEAK),
-        ("HIGH TEMP (1PM)",    SAMPLE_HIGH_TEMP),
-    ]:
-        print(f"\n{'─'*60}")
-        print(f"  Scenario: {label}")
-        print(f"{'─'*60}")
-        result = parse_packet_batch(batch)
-        print(f"  Health  : {result['health'].upper()}")
-        print(f"  Faults  : {result['faults'] or 'None'}")
-        print(f"  Parsed  : {result['successful']}/{result['total']}")
-        print(f"\n  Unified Reading:")
-        for k, v in result["reading"].items():
-            if v is not None:
-                print(f"    {k:<22}: {v}")
-
-    print("\n" + "=" * 60)
-    print("  SINGLE STRING TEST")
-    print("=" * 60)
-    test_strings = [
-        "*TOC024AA1401#",
-        "*PRS052LL0930#",
-        "*ALM001ER1530#",
-        "*BADFORMAT#",
-        "*XYZ999ZZ0000#",
-    ]
-    for s in test_strings:
-        r = parse_protocol_string(s)
-        status = "✅" if r["parsed_ok"] else "❌"
-        if r["parsed_ok"]:
-            print(f"  {status} {s} → {r['protocol']}: {r['value']} {r['unit']} [{r['health']}]")
-        else:
-            print(f"  {status} {s} → ERROR: {r['error']}")

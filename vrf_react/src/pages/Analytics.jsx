@@ -52,8 +52,8 @@ export default function Analytics({ API }) {
   const anomalies = anomaly.total_anomalies || 0;
   const anomPct  = total > 0 ? ((anomalies / total) * 100).toFixed(1) : "0.0";
 
-  const healthColors = { healthy:"#dcfce7", warning:"#fef3c7", unhealthy:"#fdecea" };
-  const healthBorder = { healthy:"#bbf7d0", warning:"#fcd34d", unhealthy:"#fca5a5" };
+  const healthColors = { healthy:"#166534", warning:"#b45309", unhealthy:"#c0392b" };
+  const healthBorder = { healthy:"#14532d", warning:"#92400e", unhealthy:"#991b1b" };
   const healthData = Object.entries(health).map(([k, v]) => ({ name: k, value: Number(v) }));
   const faultData  = faults.map(f => ({
     name: (f.fault_predicted || "").replace(/_/g, " "),
@@ -115,7 +115,7 @@ export default function Analytics({ API }) {
                 <XAxis dataKey="name" tick={{ fontSize:9, fill:"#999" }} angle={-15} textAnchor="end" />
                 <YAxis tick={{ fontSize:9, fill:"#999" }} />
                 <Tooltip contentStyle={{ fontSize:11, fontFamily:"'IBM Plex Mono',monospace" }} />
-                <Bar dataKey="count" fill="#1a4fa0" radius={[3,3,0,0]} />
+                <Bar dataKey="count" fill="#1a4fa0" radius={[3,3,0,0]} maxBarSize={60} />
               </BarChart>
             </ResponsiveContainer>
           ) : (

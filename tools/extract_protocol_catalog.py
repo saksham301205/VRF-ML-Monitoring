@@ -155,36 +155,34 @@ def extract_fields(cells: dict[tuple[int, int], str]) -> list[dict[str, Any]]:
         length_int = as_int(length)
 
         if left_param or left_desc:
-            fields.append(
-                {
-                    "row": row,
-                    "group": "left",
-                    "byte_no": byte_int,
-                    "byte_no_raw": byte_no,
-                    "length": length_int,
-                    "length_raw": length,
-                    "parameter": left_param,
-                    "description": normalize_description(left_desc),
-                    "notes": normalize_description(cells.get((row, 5), "")),
-                }
-            )
+            d = {
+                "row": row,
+                "group": "left",
+                "byte_no": byte_int,
+                "length": length_int,
+            }
+            if left_param: d["parameter"] = left_param
+            desc = normalize_description(left_desc)
+            if desc: d["description"] = desc
+            notes = normalize_description(cells.get((row, 5), ""))
+            if notes: d["notes"] = notes
+            fields.append(d)
 
         has_right = right_param or right_desc
         differs_from_left = (right_param, right_desc) != (left_param, left_desc)
         if has_right and differs_from_left:
-            fields.append(
-                {
-                    "row": row,
-                    "group": "right",
-                    "byte_no": byte_int,
-                    "byte_no_raw": byte_no,
-                    "length": length_int,
-                    "length_raw": length,
-                    "parameter": right_param,
-                    "description": normalize_description(right_desc),
-                    "notes": normalize_description(cells.get((row, 8), "")),
-                }
-            )
+            d = {
+                "row": row,
+                "group": "right",
+                "byte_no": byte_int,
+                "length": length_int,
+            }
+            if right_param: d["parameter"] = right_param
+            desc = normalize_description(right_desc)
+            if desc: d["description"] = desc
+            notes = normalize_description(cells.get((row, 8), ""))
+            if notes: d["notes"] = notes
+            fields.append(d)
 
     return fields
 

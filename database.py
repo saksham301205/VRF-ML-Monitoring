@@ -17,6 +17,18 @@ DB_CONFIG = {
 
 DB_NAME = "vrf_system"
 
+
+def _ensure_column(cur, table: str, column: str, definition: str):
+    cur.execute(f"SHOW COLUMNS FROM {table} LIKE %s", (column,))
+    if cur.fetchone() is None:
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _ensure_index(cur, table: str, index_name: str, columns_sql: str):
+    cur.execute(f"SHOW INDEX FROM {table} WHERE Key_name = %s", (index_name,))
+    if cur.fetchone() is None:
+        cur.execute(f"CREATE INDEX {index_name} ON {table} ({columns_sql})")
+
 # ─────────────────────────────────────────────
 #  CONNECTION HELPER
 # ─────────────────────────────────────────────
@@ -112,6 +124,8 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS parsed_readings (
                     id                  INT AUTO_INCREMENT PRIMARY KEY,
                     timestamp           DATETIME     NOT NULL,
+                    raw_string          LONGTEXT,
+                    source              VARCHAR(50)  DEFAULT 'real',
                     ambient_temp        FLOAT,
                     indoor_temp         FLOAT,
                     setpoint_temp       FLOAT,
@@ -137,6 +151,7 @@ def init_db():
                     id              INT AUTO_INCREMENT PRIMARY KEY,
                     timestamp       DATETIME        NOT NULL,
                     protocol        VARCHAR(50)     DEFAULT NULL,
+                    source          VARCHAR(50)     DEFAULT 'real',
                     status          ENUM('healthy', 'unhealthy', 'warning') NOT NULL,
                     parameter       VARCHAR(100)    DEFAULT NULL,
                     actual_value    FLOAT           DEFAULT NULL,
@@ -152,6 +167,7 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS ml_predictions (
                     id                  INT AUTO_INCREMENT PRIMARY KEY,
                     timestamp           DATETIME        NOT NULL,
+                    source              VARCHAR(50)     DEFAULT 'real',
                     anomaly_detected    BOOLEAN         DEFAULT FALSE,
                     anomaly_score       FLOAT           DEFAULT NULL,
                     anomaly_severity    FLOAT           DEFAULT NULL,
@@ -164,6 +180,20 @@ def init_db():
                     created_at          TIMESTAMP       DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            _ensure_column(cur, "raw_packets", "source", "VARCHAR(50) DEFAULT 'simulator'")
+            _ensure_column(cur, "protocol_frames", "source", "VARCHAR(50) DEFAULT 'device'")
+            _ensure_column(cur, "parsed_readings", "raw_string", "LONGTEXT")
+            _ensure_column(cur, "parsed_readings", "source", "VARCHAR(50) DEFAULT 'real'")
+            _ensure_column(cur, "health_log", "source", "VARCHAR(50) DEFAULT 'real'")
+            _ensure_column(cur, "ml_predictions", "source", "VARCHAR(50) DEFAULT 'real'")
+
+            _ensure_index(cur, "protocol_frames", "idx_protocol_frames_source_time_id", "source, timestamp, id")
+            _ensure_index(cur, "protocol_field_values", "idx_protocol_field_values_frame_byte", "frame_id, byte_no")
+            _ensure_index(cur, "protocol_field_values", "idx_protocol_field_values_frame_type", "frame_id, value_type")
+            _ensure_index(cur, "parsed_readings", "idx_parsed_readings_source_time_id", "source, timestamp, id")
+            _ensure_index(cur, "ml_predictions", "idx_ml_predictions_source_time_id", "source, timestamp, id")
+            _ensure_index(cur, "health_log", "idx_health_log_source_status", "source, status")
 
         conn.commit()
         print("MySQL Database & Tables ready")
@@ -253,22 +283,26 @@ def insert_protocol_frame(parsed_frame: dict, source: str = "device"):
         return None
 
 
-def insert_parsed_reading(reading: dict):
+def insert_parsed_reading(reading: dict, source: str = "real"):
     """Save a parsed sensor reading to parsed_readings table."""
     try:
+        row_source = reading.get("source") or source
         conn = get_connection()
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO parsed_readings (
-                    timestamp, ambient_temp, indoor_temp, setpoint_temp,
+                    timestamp, raw_string, source,
+                    ambient_temp, indoor_temp, setpoint_temp,
                     suction_pressure, discharge_pressure, compressor_speed,
                     fan_speed, power_consumption, superheat, subcooling,
                     cop, evap_temp, cond_temp, fault_mode, compressor_on
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
             """, (
                 str(reading.get("timestamp", "")).replace("T", " ")[:19],
+                reading.get("raw_string"),
+                row_source,
                 reading.get("ambient_temp"),
                 reading.get("indoor_temp"),
                 reading.get("setpoint_temp"),
@@ -292,17 +326,18 @@ def insert_parsed_reading(reading: dict):
 
 
 def insert_health_log(timestamp, protocol, status, parameter,
-                      actual_value, expected_min, expected_max, reason):
+                      actual_value, expected_min, expected_max, reason,
+                      source: str = "real"):
     """Log a healthy/unhealthy/warning event."""
     try:
         conn = get_connection()
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO health_log (
-                    timestamp, protocol, status, parameter,
+                    timestamp, protocol, source, status, parameter,
                     actual_value, expected_min, expected_max, reason
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (timestamp, protocol, status, parameter,
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (timestamp, protocol, source, status, parameter,
                   actual_value, expected_min, expected_max, reason))
         conn.commit()
         conn.close()
@@ -310,19 +345,22 @@ def insert_health_log(timestamp, protocol, status, parameter,
         print(f"[DB ERROR] insert_health_log: {e}")
 
 
-def insert_ml_prediction(timestamp, ml_anomaly: dict, ml_fault: dict, ml_energy: dict):
+def insert_ml_prediction(timestamp, ml_anomaly: dict, ml_fault: dict, ml_energy: dict,
+                         source: str = "real"):
     """Save ML model predictions."""
     try:
         conn = get_connection()
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO ml_predictions (
-                    timestamp, anomaly_detected, anomaly_score, anomaly_severity,
+                    timestamp, source,
+                    anomaly_detected, anomaly_score, anomaly_severity,
                     fault_predicted, fault_confidence,
                     current_power_kw, optimized_power_kw, savings_pct, recommended_params
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 str(timestamp).replace("T", " ")[:19],
+                source,
                 ml_anomaly.get("anomaly", False),
                 ml_anomaly.get("score"),
                 ml_anomaly.get("severity"),
@@ -345,21 +383,21 @@ def insert_ml_prediction(timestamp, ml_anomaly: dict, ml_fault: dict, ml_energy:
 
 # Normal operating ranges for each parameter
 HEALTHY_RANGES = {
-    "ambient_temp":        (10,  50),
-    "indoor_temp":         (16,  30),
-    "suction_pressure":    (4,   12),
-    "discharge_pressure":  (15,  35),
-    "compressor_speed":    (1000, 5500),
-    "fan_speed":           (500, 1800),
-    "power_consumption":   (1,   10),
-    "superheat":           (3,   15),
-    "subcooling":          (2,   12),
-    "cop":                 (1.5,  5),
-    "evap_temp":           (5,   20),
-    "cond_temp":           (30,  60),
+    "ambient_temp":        (0,  60),
+    "indoor_temp":         (0,  60),
+    "suction_pressure":    (0,   12),
+    "discharge_pressure":  (0,  35),
+    "compressor_speed":    (0, 6000),
+    "fan_speed":           (0, 2000),
+    "power_consumption":   (0,   20),
+    "superheat":           (0,   15),
+    "subcooling":          (0,   12),
+    "cop":                 (0,  5),
+    "evap_temp":           (0,   20),
+    "cond_temp":           (0,  60),
 }
 
-def check_health(reading: dict) -> str:
+def check_health(reading: dict, source: str = "real") -> str:
     """
     Check if a reading is healthy, warning, or unhealthy.
     Logs any out-of-range parameters to health_log table.
@@ -386,7 +424,7 @@ def check_health(reading: dict) -> str:
                 overall = "warning"
 
             reason = f"{param} = {value} out of range [{min_val}, {max_val}]"
-            insert_health_log(ts, "VRF", status, param, value, min_val, max_val, reason)
+            insert_health_log(ts, "VRF", status, param, value, min_val, max_val, reason, source=source)
 
     return overall
 
@@ -395,16 +433,99 @@ def check_health(reading: dict) -> str:
 #  QUERY FUNCTIONS
 # ─────────────────────────────────────────────
 
-def get_recent_readings(limit: int = 100) -> list:
-    """Fetch the most recent parsed readings."""
+def _source_where(source: str, alias: str = ""):
+    column = f"{alias}.source" if alias else "source"
+    if source == "all" or not source:
+        return "", ()
+    elif source == "real":
+        return f"WHERE ({column} != 'simulator' OR {column} IS NULL)", ()
+    else:
+        return f"WHERE {column} = %s", (source,)
+
+
+def _field_label(field: dict) -> str:
+    label = (field.get("parameter_name") or field.get("field_key") or "").strip()
+    if not label:
+        label = f"B{field.get('byte_no')}"
+    return label.replace("_", " ")[:32]
+
+
+def _field_value(field: dict):
+    label = field.get("decoded_label")
+    value = field.get("decoded_value")
+    return label if label not in (None, "") else value
+
+
+def _summarize_fields(fields: list[dict], max_items: int = 6) -> str:
+    parts = []
+    seen = set()
+    for field in fields:
+        value = _field_value(field)
+        if value in (None, ""):
+            continue
+        label = _field_label(field)
+        if label in ("*", "#") or label in seen:
+            continue
+        seen.add(label)
+        parts.append(f"{label}: {value}")
+        if len(parts) >= max_items:
+            break
+    return " | ".join(parts)
+
+def get_latest_reading(source: str = "real") -> dict:
+    """Fetch the single most recent parsed reading."""
+    rows = get_recent_readings(limit=1, source=source)
+    return rows[0] if rows else {}
+
+def delete_sample_data() -> dict:
+    """Delete all data where source = 'simulator'."""
+    counts = {}
     try:
         conn = get_connection()
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT * FROM parsed_readings
-                ORDER BY timestamp DESC
+            for table in ["ml_predictions", "parsed_readings", "health_log", "protocol_frames", "raw_packets"]:
+                cur.execute(f"DELETE FROM {table} WHERE source = 'simulator'")
+                counts[table] = cur.rowcount
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[DB ERROR] delete_sample_data: {e}")
+    return counts
+
+def delete_all_data() -> dict:
+    """Delete all data from the database."""
+    counts = {}
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            for table in ["ml_predictions", "parsed_readings", "health_log", "protocol_frames", "raw_packets"]:
+                cur.execute(f"DELETE FROM {table}")
+                counts[table] = cur.rowcount
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[DB ERROR] delete_all_data: {e}")
+    return counts
+
+def get_recent_readings(limit: int = 100, source: str = "real") -> list:
+    """Fetch the most recent parsed readings."""
+    try:
+        where_sql, params = _source_where(source)
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT
+                    id, timestamp, raw_string, source,
+                    ambient_temp, indoor_temp, setpoint_temp,
+                    suction_pressure, discharge_pressure,
+                    compressor_speed, fan_speed, power_consumption,
+                    superheat, subcooling, cop, evap_temp, cond_temp,
+                    fault_mode, compressor_on, created_at
+                FROM parsed_readings
+                {where_sql}
+                ORDER BY timestamp DESC, id DESC
                 LIMIT %s
-            """, (limit,))
+            """, (*params, limit))
             rows = cur.fetchall()
         conn.close()
         return rows
@@ -413,16 +534,23 @@ def get_recent_readings(limit: int = 100) -> list:
         return []
 
 
-def get_recent_predictions(limit: int = 100) -> list:
+def get_recent_predictions(limit: int = 100, source: str = "real") -> list:
     """Fetch recent ML predictions."""
     try:
+        where_sql, params = _source_where(source)
         conn = get_connection()
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT * FROM ml_predictions
-                ORDER BY timestamp DESC
+            cur.execute(f"""
+                SELECT
+                    id, timestamp, source, anomaly_detected,
+                    anomaly_score, anomaly_severity, fault_predicted,
+                    fault_confidence, current_power_kw,
+                    optimized_power_kw, savings_pct, created_at
+                FROM ml_predictions
+                {where_sql}
+                ORDER BY timestamp DESC, id DESC
                 LIMIT %s
-            """, (limit,))
+            """, (*params, limit))
             rows = cur.fetchall()
         conn.close()
         return rows
@@ -431,21 +559,53 @@ def get_recent_predictions(limit: int = 100) -> list:
         return []
 
 
-def get_recent_protocol_frames(limit: int = 100) -> list:
+def get_recent_protocol_frames(limit: int = 100, source: str = "real") -> list:
     """Fetch recent parsed company protocol frames."""
     try:
+        where_sql, params = _source_where(source)
         conn = get_connection()
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT
-                    id, timestamp, frame_name, source, crc, crc_calculated,
+                    id, timestamp, frame_name, source, raw_string,
+                    crc, crc_calculated,
                     crc_valid, parsed_ok, present_field_count,
                     numeric_field_count, error, created_at
                 FROM protocol_frames
-                ORDER BY timestamp DESC
+                {where_sql}
+                ORDER BY timestamp DESC, id DESC
                 LIMIT %s
-            """, (limit,))
+            """, (*params, limit))
             rows = cur.fetchall()
+
+            frame_ids = [row["id"] for row in rows]
+            if frame_ids:
+                placeholders = ",".join(["%s"] * len(frame_ids))
+                cur.execute(f"""
+                    SELECT
+                        frame_id, parameter_name, field_key, byte_no,
+                        decoded_value, decoded_label, value_type
+                    FROM protocol_field_values
+                    WHERE frame_id IN ({placeholders})
+                      AND decoded_value IS NOT NULL
+                      AND decoded_value != ''
+                      AND COALESCE(parameter_name, '') NOT IN ('*', '#')
+                      AND (
+                        value_type = 'number'
+                        OR decoded_label IS NOT NULL
+                        OR LOWER(COALESCE(parameter_name, '')) REGEXP
+                          'temp|pressure|rpm|speed|power|current|voltage|frequency|fan|compressor|suction|discharge|toc|tamb|tgas|tliq|rps|pwr'
+                      )
+                    ORDER BY frame_id DESC, byte_no ASC
+                """, frame_ids)
+                fields_by_frame = {}
+                for field in cur.fetchall():
+                    fields_by_frame.setdefault(field["frame_id"], []).append(field)
+                for row in rows:
+                    row["value_summary"] = _summarize_fields(fields_by_frame.get(row["id"], []))
+            else:
+                for row in rows:
+                    row["value_summary"] = ""
         conn.close()
         return rows
     except Exception as e:
@@ -453,19 +613,35 @@ def get_recent_protocol_frames(limit: int = 100) -> list:
         return []
 
 
-def get_recent_protocol_fields(limit: int = 300) -> list:
+def get_recent_protocol_fields(limit: int = 300, source: str = "real") -> list:
     """Fetch recent decoded protocol field values."""
     try:
+        where_sql, params = _source_where(source, alias="pf")
+
         conn = get_connection()
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(f"""
+                SELECT pf.id
+                FROM protocol_frames pf
+                {where_sql}
+                ORDER BY pf.timestamp DESC, pf.id DESC
+                LIMIT %s
+            """, (*params, max(1, min(25, limit))))
+            frame_ids = [row["id"] for row in cur.fetchall()]
+            if not frame_ids:
+                conn.close()
+                return []
+
+            placeholders = ",".join(["%s"] * len(frame_ids))
+            cur.execute(f"""
                 SELECT
                     pfv.*, pf.frame_name, pf.timestamp
                 FROM protocol_field_values pfv
                 JOIN protocol_frames pf ON pf.id = pfv.frame_id
-                ORDER BY pf.timestamp DESC, pfv.byte_no ASC
+                WHERE pfv.frame_id IN ({placeholders})
+                ORDER BY pf.id DESC, pfv.byte_no ASC
                 LIMIT %s
-            """, (limit,))
+            """, (*frame_ids, limit))
             rows = cur.fetchall()
         conn.close()
         return rows
@@ -474,16 +650,18 @@ def get_recent_protocol_fields(limit: int = 300) -> list:
         return []
 
 
-def get_health_summary() -> dict:
+def get_health_summary(source: str = "real") -> dict:
     """Get count of healthy/warning/unhealthy events."""
     try:
+        where_sql, params = _source_where(source)
         conn = get_connection()
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT status, COUNT(*) as count
                 FROM health_log
+                {where_sql}
                 GROUP BY status
-            """)
+            """, params)
             rows = cur.fetchall()
         conn.close()
         return {r["status"]: r["count"] for r in rows}
@@ -492,19 +670,21 @@ def get_health_summary() -> dict:
         return {}
 
 
-def get_anomaly_stats() -> dict:
+def get_anomaly_stats(source: str = "real") -> dict:
     """Get anomaly statistics from ML predictions."""
     try:
+        where_sql, params = _source_where(source)
         conn = get_connection()
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT
                     COUNT(*) as total,
                     SUM(anomaly_detected) as total_anomalies,
                     AVG(anomaly_severity) as avg_severity,
                     MAX(anomaly_severity) as max_severity
                 FROM ml_predictions
-            """)
+                {where_sql}
+            """, params)
             row = cur.fetchone()
         conn.close()
         return row or {}
@@ -513,18 +693,24 @@ def get_anomaly_stats() -> dict:
         return {}
 
 
-def get_fault_distribution() -> list:
+def get_fault_distribution(source: str = "real") -> list:
     """Get count of each fault type predicted."""
     try:
+        where_sql, params = _source_where(source)
+        if where_sql:
+            where_sql += " AND fault_predicted != 'none'"
+        else:
+            where_sql = "WHERE fault_predicted != 'none'"
+        
         conn = get_connection()
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT fault_predicted, COUNT(*) as count
                 FROM ml_predictions
-                WHERE fault_predicted != 'none'
+                {where_sql}
                 GROUP BY fault_predicted
                 ORDER BY count DESC
-            """)
+            """, params)
             rows = cur.fetchall()
         conn.close()
         return rows

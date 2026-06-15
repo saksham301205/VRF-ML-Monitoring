@@ -1,16 +1,11 @@
 const SENSORS = [
-  { key:"ambient_temp",       label:"Ambient Temp",     unit:"°C",  min:10,   max:50   },
-  { key:"indoor_temp",        label:"Indoor Temp",      unit:"°C",  min:16,   max:30   },
-  { key:"suction_pressure",   label:"Suction Press.",   unit:"bar", min:4,    max:12   },
-  { key:"discharge_pressure", label:"Discharge Press.", unit:"bar", min:15,   max:35   },
-  { key:"compressor_speed",   label:"Compressor",       unit:"RPM", min:1000, max:5500 },
-  { key:"fan_speed",          label:"Fan Speed",        unit:"RPM", min:500,  max:1800 },
-  { key:"power_consumption",  label:"Power",            unit:"kW",  min:1,    max:10   },
-  { key:"superheat",          label:"Superheat",        unit:"°C",  min:3,    max:15   },
-  { key:"subcooling",         label:"Subcooling",       unit:"°C",  min:2,    max:12   },
-  { key:"cop",                label:"COP",              unit:"",    min:1.5,  max:5    },
-  { key:"evap_temp",          label:"Evap Temp",        unit:"°C",  min:5,    max:20   },
-  { key:"cond_temp",          label:"Cond Temp",        unit:"°C",  min:30,   max:60   },
+  { key:"ambient_temp",       label:"Ambient Temp",     unit:"°C",  min:0,    max:60   },
+  { key:"indoor_temp",        label:"Indoor Temp",      unit:"°C",  min:0,    max:60   },
+  { key:"suction_pressure",   label:"Suction Press.",   unit:"bar", min:0,    max:12   },
+  { key:"discharge_pressure", label:"Discharge Press.", unit:"bar", min:0,    max:35   },
+  { key:"compressor_speed",   label:"Compressor",       unit:"RPM", min:0,    max:6000 },
+  { key:"fan_speed",          label:"Fan Speed",        unit:"RPM", min:0,    max:2000 },
+  { key:"power_consumption",  label:"Power",            unit:"kW",  min:0,    max:20   },
 ];
 
 function MLCard({ tag, value, sub, alert, warn, info }) {
@@ -48,6 +43,9 @@ export default function Sidebar({ data }) {
   const hs = data?.health_status || "healthy";
   const fault   = data?.fault_mode;
   const hasFault= fault && fault !== "none";
+  const hasData = SENSORS.some(({ key }) =>
+    data?.[key] !== undefined && data?.[key] !== null
+  );
 
   return (
     <aside style={{ width:"100%", background:"#fff",
@@ -66,10 +64,10 @@ export default function Sidebar({ data }) {
         alert={a.anomaly} />
 
       <MLCard tag="Fault Classifier"
-        value={f.fault && f.fault!=="none"
+        value={!hasData ? "WAITING" : f.fault && f.fault!=="none" && f.fault!=="unknown"
           ? f.fault.toUpperCase().replace(/_/g," ") : "NONE"}
-        sub={`Confidence: ${((f.confidence||0)*100).toFixed(1)}%`}
-        alert={f.fault && f.fault!=="none"} />
+        sub={hasData ? `Confidence: ${((f.confidence||0)*100).toFixed(1)}%` : "No real reading yet"}
+        alert={f.fault && f.fault!=="none" && f.fault!=="unknown"} />
 
       <MLCard tag="Energy Optimizer"
         value={`${e.current_power_kw||"--"} kW`}

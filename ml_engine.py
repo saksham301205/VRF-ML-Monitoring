@@ -94,7 +94,7 @@ class FaultClassifier:
             self.model = joblib.load(self.path)
             return True
         return False
-
+    
     def predict(self, reading: dict) -> dict:
         if self.model is None:
             self.load()

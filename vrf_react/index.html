@@ -1,1 +1,11 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>VRF Intel</title></head><body><div id="root"></div><script type="module" src="/src/main.jsx"></script></body></html>
+<!DOCTYPE html><html lang="en"><head>
+<script>
+window.onerror = function(message, source, lineno, colno, error) {
+    fetch('http://localhost:5000/api/log_error', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({message, source, lineno, colno, stack: error ? error.stack : ''})
+    });
+};
+</script>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>VRF Intel</title></head><body><div id="root"></div><script type="module" src="/src/main.jsx"></script></body></html>

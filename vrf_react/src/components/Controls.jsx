@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Cable, RefreshCw, Send, Square } from "lucide-react";
+import { Cable, Download, RefreshCw, Send, Square, Zap } from "lucide-react";
 
-const Btn = ({ children, onClick, variant="default", disabled=false, title }) => {
+const Btn = ({ children, onClick, variant = "default", disabled = false, title }) => {
   const styles = {
     default: { background:"#fff", color:"#333", border:"1px solid #cbd0d8" },
     primary: { background:"#1a4fa0", color:"#fff", border:"1px solid #1a4fa0" },
@@ -15,8 +15,8 @@ const Btn = ({ children, onClick, variant="default", disabled=false, title }) =>
       transition:"all 0.15s", opacity:disabled ? 0.55 : 1,
       display:"inline-flex", alignItems:"center", gap:6, minHeight:30
     }}
-    onMouseEnter={e => { if (!disabled) e.currentTarget.style.opacity="0.85"; }}
-    onMouseLeave={e => { if (!disabled) e.currentTarget.style.opacity="1"; }}>
+    onMouseEnter={e => { if (!disabled) e.currentTarget.style.opacity = "0.85"; }}
+    onMouseLeave={e => { if (!disabled) e.currentTarget.style.opacity = "1"; }}>
       {children}
     </button>
   );
@@ -25,8 +25,8 @@ const Btn = ({ children, onClick, variant="default", disabled=false, title }) =>
 const Sep = () => <div style={{ width:1, height:20, background:"#e0e3e8", margin:"0 4px" }} />;
 const Lbl = ({ children }) => <span style={{ fontSize:11, color:"#999", whiteSpace:"nowrap" }}>{children}</span>;
 
-const Sel = ({ children, value, onChange, disabled=false, minWidth=0 }) => (
-  <select disabled={disabled} value={value} onChange={e=>onChange(e.target.value)} style={{
+const Sel = ({ children, value, onChange, disabled = false, minWidth = 0 }) => (
+  <select disabled={disabled} value={value} onChange={e => onChange(e.target.value)} style={{
     fontFamily:"Inter,sans-serif", fontSize:11,
     background:"#fff", color:"#333",
     border:"1px solid #cbd0d8", borderRadius:4,
@@ -35,15 +35,9 @@ const Sel = ({ children, value, onChange, disabled=false, minWidth=0 }) => (
   }}>{children}</select>
 );
 
-export default function Controls({
-  streaming, serial, onInjectFault, onClearFault,
-  onSetSetpoint, onRetrain, onToggleStream, onExportCSV
-}) {
-  const [fault,    setFault]    = useState("refrigerant_leak");
-  const [severity, setSeverity] = useState("0.6");
-  const [setpoint, setSetpoint_] = useState(24);
-  const [toast,    setToast]    = useState("");
-  const [tx,       setTx]       = useState("");
+export default function Controls({ serial, onRetrain, onExportCSV }) {
+  const [toast, setToast] = useState("");
+  const [tx, setTx] = useState("");
 
   const ports = serial?.ports || [];
   const serialAvailable = Boolean(serial?.available);
@@ -152,7 +146,7 @@ export default function Controls({
         <Send size={13} /> Send
       </Btn>
       <div title={latestHex || serialStatus} style={{
-        maxWidth:240, minWidth:120, overflow:"hidden", textOverflow:"ellipsis",
+        maxWidth:260, minWidth:140, overflow:"hidden", textOverflow:"ellipsis",
         whiteSpace:"nowrap", fontSize:11, color:serial?.error ? "#c0392b" : "#4b5563",
         background:serialConnected ? "#eef6ff" : "#f8fafc",
         border:"1px solid #dbe3ea", borderRadius:4, padding:"7px 10px",
@@ -163,39 +157,19 @@ export default function Controls({
 
       <Sep />
 
-      <Lbl>Inject Fault:</Lbl>
-      <Sel value={fault} onChange={setFault}>
-        <option value="refrigerant_leak">Refrigerant Leak</option>
-        <option value="compressor_overload">Compressor Overload</option>
-        <option value="dirty_filter">Dirty Filter</option>
-        <option value="sensor_drift">Sensor Drift</option>
-      </Sel>
-      <Sel value={severity} onChange={setSeverity}>
-        <option value="0.3">Low</option>
-        <option value="0.6">Medium</option>
-        <option value="0.9">High</option>
-      </Sel>
-      <Btn variant="danger" onClick={() => {
-        onInjectFault(fault, parseFloat(severity));
-        showToast(`Fault injected: ${fault.replace(/_/g," ")}`);
-      }}>Inject Fault</Btn>
-      <Btn onClick={() => { onClearFault(); showToast("Fault cleared"); }}>Clear Fault</Btn>
-
-      <Sep />
-
-      <Lbl>Setpoint:</Lbl>
-      <input type="range" min={18} max={30} step={0.5} value={setpoint}
-        style={{ accentColor:"#1a4fa0", width:80, cursor:"pointer" }}
-        onChange={e => { setSetpoint_(parseFloat(e.target.value)); onSetSetpoint(parseFloat(e.target.value)); }} />
-      <Lbl>{setpoint}°C</Lbl>
-
-      <Sep />
-
-      <Btn variant="primary" onClick={() => { onRetrain(); showToast("Retraining ML models..."); }}>Retrain ML</Btn>
-      <Btn onClick={() => { onToggleStream(); showToast(streaming ? "Stream paused" : "Stream resumed"); }}>
-        {streaming ? "Pause" : "Resume"}
+      <Btn variant="primary" onClick={async () => {
+        try {
+          await onRetrain();
+          showToast("Retrained from real readings");
+        } catch (err) {
+          showToast(err?.response?.data?.message || "Need more complete real readings");
+        }
+      }}>
+        <Zap size={13} /> Retrain ML
       </Btn>
-      <Btn onClick={() => { onExportCSV(); showToast("Exported to CSV"); }}>Export CSV</Btn>
+      <Btn onClick={() => { onExportCSV(); showToast("Exported to CSV"); }}>
+        <Download size={13} /> Export CSV
+      </Btn>
 
       {toast && (
         <div style={{ position:"fixed", bottom:20, right:20,
