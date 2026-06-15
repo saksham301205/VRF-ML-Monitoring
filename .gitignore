@@ -1,0 +1,14 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+
+# Data exports
+data/live_export.csv
+
+# VS Code
+.vscode/
