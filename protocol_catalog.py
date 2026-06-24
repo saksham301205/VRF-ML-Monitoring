@@ -64,7 +64,6 @@ def get_catalog_summary() -> dict[str, Any]:
         "communication_sequence": catalog.get("communication_sequence", []),
     }
 
-
 def candidate_sheets_for_frame(raw_frame: str, hint: str | None = None) -> list[str]:
     """
     Return possible workbook sheets for a raw serial frame.

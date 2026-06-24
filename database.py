@@ -17,7 +17,6 @@ DB_CONFIG = {
 
 DB_NAME = "vrf_system"
 
-
 def _ensure_column(cur, table: str, column: str, definition: str):
     cur.execute(f"SHOW COLUMNS FROM {table} LIKE %s", (column,))
     if cur.fetchone() is None:
@@ -424,7 +423,8 @@ def check_health(reading: dict, source: str = "real") -> str:
                 overall = "warning"
 
             reason = f"{param} = {value} out of range [{min_val}, {max_val}]"
-            insert_health_log(ts, "VRF", status, param, value, min_val, max_val, reason, source=source)
+            if source == "manual":
+                insert_health_log(ts, "VRF", status, param, value, min_val, max_val, reason, source=source)
 
     return overall
 
@@ -584,25 +584,21 @@ def get_recent_protocol_frames(limit: int = 100, source: str = "real") -> list:
                 cur.execute(f"""
                     SELECT
                         frame_id, parameter_name, field_key, byte_no,
+                        raw_value, LENGTH(raw_value) as length,
                         decoded_value, decoded_label, value_type
                     FROM protocol_field_values
                     WHERE frame_id IN ({placeholders})
-                      AND decoded_value IS NOT NULL
-                      AND decoded_value != ''
+                      AND (decoded_value IS NOT NULL OR raw_value IS NOT NULL)
                       AND COALESCE(parameter_name, '') NOT IN ('*', '#')
-                      AND (
-                        value_type = 'number'
-                        OR decoded_label IS NOT NULL
-                        OR LOWER(COALESCE(parameter_name, '')) REGEXP
-                          'temp|pressure|rpm|speed|power|current|voltage|frequency|fan|compressor|suction|discharge|toc|tamb|tgas|tliq|rps|pwr'
-                      )
                     ORDER BY frame_id DESC, byte_no ASC
                 """, frame_ids)
                 fields_by_frame = {}
                 for field in cur.fetchall():
                     fields_by_frame.setdefault(field["frame_id"], []).append(field)
                 for row in rows:
-                    row["value_summary"] = _summarize_fields(fields_by_frame.get(row["id"], []))
+                    fields = fields_by_frame.get(row["id"], [])
+                    row["value_summary"] = _summarize_fields(fields)
+                    row["fields"] = fields
             else:
                 for row in rows:
                     row["value_summary"] = ""
@@ -640,8 +636,8 @@ def get_recent_protocol_fields(limit: int = 300, source: str = "real") -> list:
                 JOIN protocol_frames pf ON pf.id = pfv.frame_id
                 WHERE pfv.frame_id IN ({placeholders})
                 ORDER BY pf.id DESC, pfv.byte_no ASC
-                LIMIT %s
-            """, (*frame_ids, limit))
+                LIMIT 10000
+            """, (*frame_ids,))
             rows = cur.fetchall()
         conn.close()
         return rows

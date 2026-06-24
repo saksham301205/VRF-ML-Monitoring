@@ -271,7 +271,8 @@ def _merge_and_store_reading(parsed_frames: list[dict], source: str) -> tuple[di
     raw_string_val = snapshot.get("raw_string", "")
     snapshot.update(_run_ml(snapshot, source, raw_string=raw_string_val, snapshot=snapshot))
 
-    insert_parsed_reading(snapshot, source=source)
+    if source == "manual":
+        insert_parsed_reading(snapshot, source=source)
     latest_real_reading = dict(snapshot)
 
     history.append(snapshot)
@@ -440,6 +441,13 @@ def protocol_ingest():
     # Parse immediately and return results quickly
     result = parse_incoming_payload(data, frame_name=frame_name)
 
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for pf in result.get("frames", []):
+        pf["raw_string"] = pf.get("raw")
+        pf["source"] = source
+        pf["timestamp"] = now_str
+        pf["id"] = "--"
+
     # Emit parsed frames immediately so frontend can show them without waiting for DB writes
     try:
         socketio.emit("protocol_parsed", {"frames": result.get("frames", []), "source": source})
@@ -464,8 +472,8 @@ def protocol_ingest():
     # Do database operations in background thread to speed up response
     def background_save():
         try:
-            # Only persist protocol frames and merged readings when this was a manual ingest
-            if source == "manual":
+            # Only persist protocol frames and merged readings when this was a manual or serial ingest
+            if source in ("manual", "serial"):
                 for parsed_frame in result.get("frames", []):
                     parsed_frame["db_id"] = insert_protocol_frame(parsed_frame, source=source)
                 latest_reading, updated_fields = _merge_and_store_reading(result.get("frames", []), source)
@@ -474,8 +482,8 @@ def protocol_ingest():
         except Exception as e:
             print(f"[BACKGROUND SAVE ERROR] {e}")
     
-    # Start background thread for saving to database only for manual parses
-    if source == "manual":
+    # Start background thread for saving to database only for manual/serial parses
+    if source in ("manual", "serial"):
         threading.Thread(target=background_save, daemon=True).start()
     
     result["source"] = source
@@ -512,6 +520,89 @@ def db_protocol_fields():
     source = request.args.get("source", "real")
     rows = get_recent_protocol_fields(limit, source=source)
     return jsonify([_jsonify_row(r) for r in rows])
+
+@app.route("/api/db/prediction_fields/<int:ml_id>")
+def db_prediction_fields(ml_id):
+    """Return full decoded fields for a given ML prediction ID.
+    First tries to find matching protocol_frames by timestamp (exact join).
+    Falls back to re-parsing the raw_string from parsed_readings if no frame exists.
+    """
+    try:
+        from database import get_connection
+        import pymysql
+        conn = get_connection()
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            # Get the timestamp for this ML prediction
+            cur.execute("SELECT timestamp FROM ml_predictions WHERE id = %s", (ml_id,))
+            row = cur.fetchone()
+            if not row:
+                conn.close()
+                return jsonify([])
+            ts = row["timestamp"]
+
+            # Try protocol_frames first (has pre-saved fields)
+            cur.execute("""
+                SELECT id FROM protocol_frames
+                WHERE ABS(TIMESTAMPDIFF(SECOND, timestamp, %s)) <= 5
+                ORDER BY ABS(TIMESTAMPDIFF(SECOND, timestamp, %s)) ASC
+                LIMIT 5
+            """, (ts, ts))
+            frame_rows = cur.fetchall()
+            frame_ids = [r["id"] for r in frame_rows]
+
+            if frame_ids:
+                placeholders = ",".join(["%s"] * len(frame_ids))
+                cur.execute(f"""
+                    SELECT parameter_name, field_key, byte_no,
+                           raw_value, LENGTH(raw_value) as length,
+                           decoded_value, decoded_label, value_type
+                    FROM protocol_field_values
+                    WHERE frame_id IN ({placeholders})
+                      AND COALESCE(parameter_name, '') NOT IN ('*', '#')
+                    ORDER BY byte_no ASC
+                """, frame_ids)
+                fields = cur.fetchall()
+                conn.close()
+                return jsonify([_jsonify_row(f) for f in fields])
+
+            # Fall back: re-parse from parsed_readings raw_string
+            cur.execute("""
+                SELECT raw_string FROM parsed_readings
+                WHERE ABS(TIMESTAMPDIFF(SECOND, timestamp, %s)) <= 5
+                ORDER BY ABS(TIMESTAMPDIFF(SECOND, timestamp, %s)) ASC
+                LIMIT 1
+            """, (ts, ts))
+            reading_row = cur.fetchone()
+            conn.close()
+
+            if not reading_row or not reading_row.get("raw_string"):
+                return jsonify([])
+
+            from protocol_parser import parse_company_protocol_frame
+            raw = reading_row["raw_string"]
+            parsed = parse_company_protocol_frame(raw)
+            all_fields = parsed.get("fields", [])
+            result = []
+            for f in all_fields:
+                if not f.get("present", True):
+                    continue
+                param = f.get("parameter", "") or ""
+                if param in ("*", "#"):
+                    continue
+                result.append({
+                    "parameter_name": param,
+                    "field_key": f.get("field_key", ""),
+                    "byte_no": f.get("byte_no"),
+                    "raw_value": f.get("raw_value", ""),
+                    "length": f.get("length", 0),
+                    "decoded_value": f.get("decoded_value"),
+                    "decoded_label": f.get("decoded_label"),
+                    "value_type": f.get("value_type", "text"),
+                })
+            return jsonify(result)
+    except Exception as e:
+        print(f"[ERROR] prediction_fields: {e}")
+        return jsonify([])
 
 @app.route("/api/db/health_summary")
 def db_health_summary():

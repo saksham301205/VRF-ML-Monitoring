@@ -33,6 +33,8 @@ export default function App() {
   const startW   = useRef(268);
   const serialBuffer    = useRef("");
   const lastSerialEvent = useRef("");
+  const pendingSerialFrames = useRef([]);
+  const serialIngestTimer = useRef(null);
 
   // ── Accept any reading and push to charts + sidebar ─────────────────
   const acceptReading = useCallback((reading, persist = false) => {
@@ -40,9 +42,9 @@ export default function App() {
     if (Object.keys(reading).length === 0) return;
     // Merge with existing data so partial readings don't blank out fields
     setData(prev => ({ ...(prev || {}), ...reading }));
-    // Only append to history if this reading is a persisted/manual reading
+    // Only append to history if this reading is a persisted/manual/serial reading
     const src = reading.source || "";
-    if (persist || src === "manual") {
+    if (persist || src === "manual" || src === "serial") {
       setHistory(h => [reading, ...h].slice(0, 200));
     }
   }, []);
@@ -59,7 +61,7 @@ export default function App() {
     // 1. If backend returns a fully assembled reading, use it directly
     if (result?.latest_reading &&
         Object.keys(result.latest_reading).length > 0) {
-      acceptReading(result.latest_reading, source === "manual");
+      acceptReading(result.latest_reading, source === "manual" || source === "serial");
       return result;
     }
 
@@ -90,7 +92,7 @@ export default function App() {
 
     if (Object.keys(assembled).length > 0) {
       assembled.timestamp = assembled.timestamp || new Date().toISOString();
-      acceptReading(assembled, source === "manual");
+      acceptReading(assembled, source === "manual" || source === "serial");
     }
 
     return result;
@@ -217,10 +219,23 @@ export default function App() {
       : serialBuffer.current.slice(-512);
 
     if (frames.length === 0) return;
-    ingestProtocol({
-      frames,
-      serial: { path:payload.path, timestamp:payload.timestamp, hex:payload.hex },
-    }, "serial").catch(err => console.error("Serial ingest error:", err));
+    
+    pendingSerialFrames.current.push(...frames);
+    
+    if (!serialIngestTimer.current) {
+      serialIngestTimer.current = setTimeout(() => {
+        const batch = pendingSerialFrames.current;
+        pendingSerialFrames.current = [];
+        serialIngestTimer.current = null;
+        
+        if (batch.length > 0) {
+          ingestProtocol({
+            frames: batch,
+            serial: { path:payload.path, timestamp:payload.timestamp, hex:payload.hex },
+          }, "serial").catch(err => console.error("Serial ingest error:", err));
+        }
+      }, 500); // 500ms batching for performance
+    }
   }, [ingestProtocol, serial.latestData]);
 
   // ── Resizable sidebar ────────────────────────────────────────────────

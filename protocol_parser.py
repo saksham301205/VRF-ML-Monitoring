@@ -108,7 +108,8 @@ def _decode_raw_field(raw_value: str, parameter: str, description: str) -> dict[
 
     param_text = parameter.lower()
     desc_text = description.lower()
-    is_temperature = "temp" in param_text or "temperature" in desc_text
+    param_tokens = set(re.split(r'\W+', param_text))
+    is_temperature = "temp" in param_text or "temperature" in desc_text or any(x in param_tokens for x in ["tamb", "tgas", "tgas1", "tgas2", "tliq", "tliq1", "tliq2", "indoor"])
     has_decimal_hint = "/10" in desc_text or "decimal" in desc_text or ".0" in desc_text
 
     # Signed ASCII digits (e.g. '+100', '-050') -> prefer decimal parsing
@@ -221,6 +222,50 @@ def _decode_against_sheet(
             }
         )
 
+    mapped_bytes = set()
+    for field in sheet.get("fields", []):
+        start = field.get("byte_no")
+        length = field.get("length")
+        if start is not None and length is not None and length > 0:
+            for i in range(start, min(start + length, len(raw))):
+                mapped_bytes.add(i)
+
+    unmapped_blocks = []
+    current_block = []
+    current_start = -1
+    for i in range(len(raw)):
+        if i not in mapped_bytes:
+            if current_start == -1:
+                current_start = i
+            current_block.append(raw[i])
+        else:
+            if current_start != -1:
+                unmapped_blocks.append((current_start, ''.join(current_block)))
+                current_start = -1
+                current_block = []
+    if current_start != -1:
+        unmapped_blocks.append((current_start, ''.join(current_block)))
+
+    block_count = 1
+    for start, val in unmapped_blocks:
+        decoded_fields.append({
+            "sheet": sheet_name,
+            "row": "Dynamic",
+            "group": "Unmapped Data",
+            "byte_no": start,
+            "length": len(val),
+            "parameter": f"Unmapped Block {block_count}",
+            "field_key": f"unmapped_block_{block_count}",
+            "description": "Unmapped byte sequence",
+            "raw_value": val,
+            "decoded_value": val,
+            "decoded_label": None,
+            "value_type": "text",
+            "present": True,
+        })
+        block_count += 1
+        present_count += 1
+
     return {
         "sheet_name": sheet_name,
         "dimension": sheet.get("dimension"),
@@ -270,12 +315,13 @@ def _company_reading_from_fields(fields: list[dict[str, Any]]) -> dict[str, Any]
 
         # Normalize parameter/description for robust matching
         name = f"{field.get('parameter', '')} {field.get('description', '')}".lower()
+        name_tokens = set(re.split(r'\W+', name))
         key = field.get("field_key") or ""
 
         # Temperature aliases
-        if any(tok in name for tok in ("tamb", "ambient", "ambient temp")):
+        if "tamb" in name_tokens or "ambient" in name_tokens or "ambient temp" in name:
             set_if_empty("ambient_temp", value)
-        elif any(tok in name for tok in ("indoor", "indoor temp", "toc")):
+        elif "indoor" in name_tokens or "indoor temp" in name:
             set_if_empty("indoor_temp", value)
         elif any(tok in name for tok in ("tgas", "tgas1", "tgas2")) or key.startswith("tgas"):
             set_if_empty("tgas1", value)
@@ -467,7 +513,7 @@ def parse_incoming_payload(payload: Any, frame_name: str | None = None) -> dict:
         for frame in raw_frames
     ]
     catalog_summary = get_catalog_summary()
-
+    
     return {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "total": len(raw_frames),

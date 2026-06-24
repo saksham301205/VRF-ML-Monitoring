@@ -5,6 +5,7 @@ import { Copy, Play, RefreshCw, Trash2 } from "lucide-react";
 export default function History({ API, onIngest }) {
   const [rows,       setRows]       = useState([]);
   const [mlRows,     setMlRows]     = useState([]);
+  const [frameRows,  setFrameRows]  = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [mlLoading,  setMlLoading]  = useState(true);
   const [limit,      setLimit]      = useState(200);
@@ -12,14 +13,71 @@ export default function History({ API, onIngest }) {
   const [parseMsg,   setParseMsg]   = useState("");
   const [copied,     setCopied]     = useState(null);
   const [expandedMlId, setExpandedMlId] = useState(null);
+  const [viewPage, setViewPage] = useState(1);
   const [mlPreviewData, setMlPreviewData] = useState({});
+  const [fetchedFields, setFetchedFields] = useState({});   // ml_id -> fields array
+  const [fieldsLoading, setFieldsLoading] = useState(false);
+  
+  const getPreviewData = (mlId) => {
+    if (!mlId) return null;
+    if (mlPreviewData[mlId]) {
+      const preview = mlPreviewData[mlId];
+      if (!preview.all_fields) {
+        preview.all_fields = Object.entries(preview.decoded_fields || {}).map(([key, val]) => ({
+          parameter_name: key.replace(/_/g, " "),
+          decoded_value: val,
+          raw_value: "—",
+          value_type: typeof val === "number" ? "number" : "text"
+        }));
+      }
+      return preview;
+    }
+    const m = mlRows.find(r => r.id === mlId);
+    if (!m) return null;
+    const r = rows.find(x => x.timestamp === m.timestamp) || {};
+    const dec = {};
+    ["ambient_temp","indoor_temp","suction_pressure","discharge_pressure","compressor_speed","fan_speed","power_consumption","superheat","subcooling","cop","evap_temp","cond_temp"].forEach(k => {
+      if (r[k] !== undefined && r[k] !== null) dec[k] = r[k];
+    });
+
+    const mTime = new Date(m.timestamp).getTime();
+    const matchingFrames = frameRows.filter(f => {
+      if (f.timestamp === m.timestamp) return true;
+      if (mTime && new Date(f.timestamp).getTime() === mTime) return true;
+      // Allow up to 2 seconds drift just in case inserts were slightly apart
+      if (mTime && Math.abs(new Date(f.timestamp).getTime() - mTime) < 2000) return true;
+      return false;
+    });
+    let allFields = [];
+    matchingFrames.forEach(f => {
+      let fieldsArray = f.fields;
+      if (typeof fieldsArray === 'string') {
+        try { fieldsArray = JSON.parse(fieldsArray); } catch(e) {}
+      }
+      if (Array.isArray(fieldsArray)) {
+         // tag fields with their frame ID/name to group them if needed
+         const fieldsWithFrame = fieldsArray.map(field => ({...field, frame_name: f.protocol || field.frame_name}));
+         allFields.push(...fieldsWithFrame);
+      }
+    });
+
+    return {
+      timestamp: m.timestamp,
+      raw_input: r.raw_string || matchingFrames.map(f => f.raw_string).join("\\n") || "—",
+      decoded_fields: dec,
+      all_fields: allFields,
+      ml_anomaly: { anomaly: m.anomaly_detected, score: m.anomaly_score, severity: m.anomaly_severity },
+      ml_fault: { fault: m.fault_predicted, confidence: m.fault_confidence },
+      ml_energy: { current_power_kw: m.current_power_kw, optimized_power_kw: m.optimized_power_kw, savings_pct: m.savings_pct }
+    };
+  };
   
   const parseBoxRef = useRef(null);
   const prevRowsId = useRef(null);
 
   const load = useCallback(async () => {
     try {
-      const r = await axios.get(`${API}/api/db/readings?limit=${limit}&source=real`);
+      const r = await axios.get(`${API}/api/db/readings?limit=${limit}`);
       const newRows = r.data || [];
       const latestId = newRows.length > 0 ? newRows[0].id : null;
       
@@ -30,10 +88,14 @@ export default function History({ API, onIngest }) {
     } catch(e) { console.error("History load error:", e); }
     setLoading(false);
 
-    axios.get(`${API}/api/db/predictions?limit=${limit}&source=real`)
+    axios.get(`${API}/api/db/predictions?limit=${limit}`)
       .then(m => setMlRows(m.data || []))
       .catch(e => console.error("Prediction load error:", e))
       .finally(() => setMlLoading(false));
+
+    axios.get(`${API}/api/db/protocol_frames?limit=${limit}`)
+      .then(m => setFrameRows(m.data || []))
+      .catch(e => console.error("Frame load error:", e));
   }, [API, limit]);
 
   useEffect(() => { load(); }, [load]);
@@ -230,7 +292,7 @@ export default function History({ API, onIngest }) {
             Click <strong style={{color:"#1a4fa0"}}>Copy</strong> on any row to send its raw frame to the parse box below
           </span>
         </div>
-        <div style={{ overflowX:"auto", maxHeight:300, overflowY:"auto" }}>
+        <div style={{ overflowX:"auto", maxHeight:300, overflowY:"scroll" }}>
           {loading && rows.length === 0 ? (
             <div style={{ padding:24, color:"#999", fontSize:12 }}>Loading...</div>
           ) : (
@@ -291,7 +353,7 @@ export default function History({ API, onIngest }) {
                         if (c === "raw_string") {
                           const displayStr = row[c] ? (row[c].length > 60 ? row[c].substring(0, 60) + "..." : row[c]) : "—";
                           return (
-                            <td key={c} style={{...tdStyle(false), fontSize:9, fontFamily:"monospace", maxWidth:150}}>
+                            <td key={c} style={{...tdStyle(false), fontSize:9, fontFamily:"monospace", maxWidth:150, overflow: "hidden", textOverflow: "ellipsis"}}>
                               {displayStr}
                             </td>
                           );
@@ -377,7 +439,7 @@ export default function History({ API, onIngest }) {
             {mlRows.length} rows
           </span>
         </div>
-        <div style={{ overflowX:"auto", maxHeight:300, overflowY:"auto" }}>
+        <div style={{ overflowX:"auto", maxHeight:300, overflowY:"scroll" }}>
           {mlLoading && mlRows.length === 0 ? (
             <div style={{ padding:24, color:"#999", fontSize:12 }}>Loading...</div>
           ) : (
@@ -412,18 +474,34 @@ export default function History({ API, onIngest }) {
                         );
                       }
                       if (c === "action") {
+                        const isExpanded = expandedMlId === row.id;
                         return (
                           <td key={c} style={{...tdStyle(false), whiteSpace:"nowrap", textAlign:"center"}}>
-                            <button onClick={() => setExpandedMlId(expandedMlId === row.id ? null : row.id)}
+                            <button onClick={() => {
+                              if (isExpanded) {
+                                setExpandedMlId(null);
+                                return;
+                              }
+                              setViewPage(1);
+                              setExpandedMlId(row.id);
+                              // Only fetch if we haven't already
+                              if (!fetchedFields[row.id]) {
+                                setFieldsLoading(true);
+                                axios.get(`${API}/api/db/prediction_fields/${row.id}`)
+                                  .then(res => setFetchedFields(prev => ({ ...prev, [row.id]: res.data || [] })))
+                                  .catch(err => console.error("Fields fetch error:", err))
+                                  .finally(() => setFieldsLoading(false));
+                              }
+                            }}
                               title="View prediction details"
                               style={{
                                 padding:"6px 10px", borderRadius:4, fontSize:11, fontWeight:700,
-                                border: `1px solid ${expandedMlId === row.id ? "#1a4fa0" : "#3b82f6"}`,
-                                background: expandedMlId === row.id ? "#1a4fa0" : "#dbeafe",
-                                color: expandedMlId === row.id ? "#fff" : "#1a4fa0",
+                                border: `1px solid ${isExpanded ? "#1a4fa0" : "#3b82f6"}`,
+                                background: isExpanded ? "#1a4fa0" : "#dbeafe",
+                                color: isExpanded ? "#fff" : "#1a4fa0",
                                 cursor:"pointer", transition:"all 0.2s"
                               }}>
-                              {expandedMlId === row.id ? "Hide" : "View"}
+                              {isExpanded ? "Hide" : "View"}
                             </button>
                           </td>
                         );
@@ -449,7 +527,10 @@ export default function History({ API, onIngest }) {
       </div>
 
       {/* ML Preview Modal */}
-      {expandedMlId && mlPreviewData[expandedMlId] && (
+      {expandedMlId && (() => {
+        const mlPred = mlRows.find(r => r.id === expandedMlId) || {};
+        const activeFields = fetchedFields[expandedMlId] || [];
+        return (
         <div style={{ background:"#fff", border:"1px solid #e0e3e8",
           borderRadius:8, overflow:"hidden", marginTop:12,
           boxShadow:"0 1px 3px rgba(0,0,0,0.04)" }}>
@@ -464,42 +545,104 @@ export default function History({ API, onIngest }) {
             </button>
           </div>
           <div style={{ padding:16 }}>
-            {/* Raw Input Display */}
-            {mlPreviewData[expandedMlId].raw_input && (
-              <div style={{ marginBottom:16, padding:10, background:"#f0fdf4", border:"1px solid #bbf7d0", borderRadius:6 }}>
-                <div style={{ fontSize:10, fontWeight:700, color:"#166534", marginBottom:4, textTransform:"uppercase", letterSpacing:"0.05em" }}>
-                  Raw Input Frame
-                </div>
-                <div style={{ fontSize:11, fontFamily:"'IBM Plex Mono',monospace", color:"#16a34a", wordBreak:"break-all", lineHeight:1.4 }}>
-                  {mlPreviewData[expandedMlId].raw_input}
-                </div>
-              </div>
-            )}
-            {/* Decoded Fields Section */}
+            {/* Decoded Fields Section (Tabular Card Format) */}
             <div style={{ marginBottom:20 }}>
               <h4 style={{ fontSize:11, fontWeight:700, color:"#0a0a0a", marginBottom:8,
-                letterSpacing:"0.05em", textTransform:"uppercase" }}>
-                Decoded Values
+                letterSpacing:"0.05em", textTransform:"uppercase", display:"flex", alignItems:"center", gap:6 }}>
+                <span style={{color:"#1a4fa0"}}>◇</span> Decoded Values
+                {fieldsLoading && <span style={{fontSize:10,color:"#999",marginLeft:8}}>Loading…</span>}
+                {!fieldsLoading && activeFields.length > 0 && (
+                  <span style={{fontSize:10,color:"#fff",fontWeight:600,background:"#166534",padding:"2px 8px",borderRadius:3,marginLeft:8}}>
+                    {activeFields.length} fields
+                  </span>
+                )}
               </h4>
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))", gap:12 }}>
-                {Object.entries(mlPreviewData[expandedMlId].decoded_fields || {}).length > 0 ? (
-                  Object.entries(mlPreviewData[expandedMlId].decoded_fields).map(([key, val]) => (
-                    <div key={key} style={{ background:"#f5f7fa", border:"1px solid #e0e3e8",
-                      borderRadius:6, padding:10 }}>
-                      <div style={{ fontSize:10, color:"#999", fontWeight:600, marginBottom:4,
-                        textTransform:"uppercase", letterSpacing:"0.05em" }}>
-                        {key.replace(/_/g," ")}
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(280px, 1fr))", gap:10, maxHeight:"400px", overflowY:"auto", paddingRight:"8px" }}>
+                {fieldsLoading ? (
+                  <div style={{color:"#999",fontSize:12,gridColumn:"1/-1",padding:"20px 0",textAlign:"center"}}>Loading decoded fields…</div>
+                ) : activeFields.length > 0 ? (
+                  activeFields.slice((viewPage-1)*100, viewPage*100).map((field, index) => {
+                    const frameLabel = field.frame || field.frame_name || field.sheet_name || "Frame";
+                    const paramName = field.parameter_name || field.field_key || "Unknown";
+                    const rawVal = field.raw_value ?? "--";
+                    const decodedVal = field.decoded_value ?? "--";
+                    const label = field.decoded_label || "";
+                    const type = field.value_type || "text";
+                    const isBad = type === "number" && decodedVal === "--";
+                    
+                    return (
+                      <div key={`${index}`}
+                        style={{
+                          border: isBad ? "1px solid #fca5a5" : "1px solid #e0e3e8",
+                          borderRadius:6, padding:10, background: isBad ? "#fef2f2" : "#f9fafb",
+                          transition: "all 0.2s"
+                        }}
+                        onMouseEnter={e => {
+                          e.currentTarget.style.border = isBad ? "1px solid #f87171" : "1px solid #cbd0d8";
+                          e.currentTarget.style.background = isBad ? "#fef9f9" : "#f5f7fa";
+                          e.currentTarget.style.boxShadow = "0 2px 6px rgba(0,0,0,0.06)";
+                        }}
+                        onMouseLeave={e => {
+                          e.currentTarget.style.border = isBad ? "1px solid #fca5a5" : "1px solid #e0e3e8";
+                          e.currentTarget.style.background = isBad ? "#fef2f2" : "#f9fafb";
+                          e.currentTarget.style.boxShadow = "none";
+                        }}>
+                        <div style={{ fontSize:9, fontWeight:700, color:"#999", textTransform:"uppercase",
+                          letterSpacing:"0.06em", marginBottom:6 }}>
+                          {frameLabel} - {paramName}
+                        </div>
+                        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:6 }}>
+                          <div>
+                            <div style={{ fontSize:9, color:"#666", marginBottom:2 }}>Raw</div>
+                            <div style={{ fontSize:11, fontFamily:"'IBM Plex Mono',monospace",
+                              fontWeight:600, color:"#333", wordBreak:"break-all" }}>
+                              {rawVal}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize:9, color:"#666", marginBottom:2 }}>Decoded</div>
+                            <div style={{ fontSize:11, fontFamily:"'IBM Plex Mono',monospace",
+                              fontWeight:600, color: decodedVal === "--" ? "#999" : "#166534",
+                              wordBreak:"break-all" }}>
+                              {decodedVal}
+                            </div>
+                          </div>
+                        </div>
+                        {label && (
+                          <div style={{ fontSize:10, color:"#1a4fa0", fontStyle:"italic",
+                            borderTop:"1px solid #e0e3e8", paddingTop:6, marginTop:6 }}>
+                            {label}
+                          </div>
+                        )}
+                        <div style={{ fontSize:9, color:"#999", marginTop:6,
+                          borderTop:"1px solid #e0e3e8", paddingTop:6 }}>
+                          Byte {field.byte_no ?? "?"} - {type}
+                        </div>
                       </div>
-                      <div style={{ fontSize:13, fontWeight:600, color:"#0a0a0a",
-                        fontFamily:"'IBM Plex Mono',monospace" }}>
-                        {typeof val === "number" ? val.toFixed(3) : val || "—"}
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 ) : (
-                  <div style={{ color:"#999", fontSize:11, gridColumn:"1/-1" }}>No decoded fields available</div>
+                  <div style={{ color:"#999", fontSize:11, gridColumn:"1/-1" }}>No decoded fields found. Try clicking View again or check your data.</div>
                 )}
               </div>
+              {activeFields.length > 100 && (
+                <div style={{ marginTop:10, padding:"10px 14px", borderTop:"1px solid #e0e3e8", display:"flex", justifyContent:"space-between", alignItems:"center", background:"#f9fafb" }}>
+                  <div style={{ fontSize:11, color:"#666" }}>
+                    Showing {(viewPage-1)*100 + 1}–{Math.min(viewPage*100, activeFields.length)} of {activeFields.length} fields
+                    &nbsp;(Total {activeFields.reduce((acc, f) => acc + (Number(f.length) || (f.raw_value ? String(f.raw_value).length : 0)), 0)} bytes)
+                  </div>
+                  <div style={{ display:"flex", gap:8 }}>
+                    <button disabled={viewPage === 1} onClick={() => setViewPage(p => p - 1)}
+                      style={{ padding:"4px 12px", fontSize:11, borderRadius:4, border:"1px solid #cbd0d8", background: viewPage===1?"#f1f5f9":"#fff", cursor:viewPage===1?"not-allowed":"pointer" }}>
+                      Previous
+                    </button>
+                    <button disabled={viewPage * 100 >= activeFields.length} onClick={() => setViewPage(p => p + 1)}
+                      style={{ padding:"4px 12px", fontSize:11, borderRadius:4, border:"1px solid #cbd0d8", background: viewPage*100>=activeFields.length?"#f1f5f9":"#fff", cursor:viewPage*100>=activeFields.length?"not-allowed":"pointer" }}>
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* ML Predictions Section */}
@@ -512,13 +655,13 @@ export default function History({ API, onIngest }) {
                 </div>
                 <div style={{ fontSize:14, fontWeight:700, color:"#0a0a0a", marginBottom:6,
                   fontFamily:"'IBM Plex Mono',monospace" }}>
-                  {mlPreviewData[expandedMlId].ml_anomaly?.anomaly ? "DETECTED" : "NORMAL"}
+                  {mlPred.anomaly_detected ? "DETECTED" : "NORMAL"}
                 </div>
                 <div style={{ fontSize:10, color:"#666" }}>
-                  Score: {(mlPreviewData[expandedMlId].ml_anomaly?.score || 0).toFixed(4)}
+                  Score: {(mlPred.anomaly_score || 0).toFixed(4)}
                 </div>
                 <div style={{ fontSize:10, color:"#666" }}>
-                  Severity: {(mlPreviewData[expandedMlId].ml_anomaly?.severity || 0).toFixed(3)}
+                  Severity: {(mlPred.anomaly_severity || 0).toFixed(3)}
                 </div>
               </div>
 
@@ -530,10 +673,10 @@ export default function History({ API, onIngest }) {
                 </div>
                 <div style={{ fontSize:14, fontWeight:700, color:"#0a0a0a", marginBottom:6,
                   fontFamily:"'IBM Plex Mono',monospace" }}>
-                  {(mlPreviewData[expandedMlId].ml_fault?.fault || "unknown").toUpperCase().replace(/_/g," ")}
+                  {(mlPred.fault_predicted || "unknown").toUpperCase().replace(/_/g," ")}
                 </div>
                 <div style={{ fontSize:10, color:"#666" }}>
-                  Confidence: {((mlPreviewData[expandedMlId].ml_fault?.confidence || 0) * 100).toFixed(1)}%
+                  Confidence: {((mlPred.fault_confidence || 0) * 100).toFixed(1)}%
                 </div>
               </div>
 
@@ -545,16 +688,16 @@ export default function History({ API, onIngest }) {
                 </div>
                 <div style={{ fontSize:14, fontWeight:700, color:"#0a0a0a", marginBottom:6,
                   fontFamily:"'IBM Plex Mono',monospace" }}>
-                  {mlPreviewData[expandedMlId].ml_energy?.current_power_kw || "—"} kW
+                  {mlPred.current_power_kw || "—"} kW
                 </div>
                 <div style={{ fontSize:10, color:"#666" }}>
-                  Potential saving: {mlPreviewData[expandedMlId].ml_energy?.savings_pct || 0}%
+                  Potential saving: {mlPred.savings_pct || 0}%
                 </div>
               </div>
             </div>
           </div>
         </div>
-      )}
+      )})()}
 
     </div>
   );

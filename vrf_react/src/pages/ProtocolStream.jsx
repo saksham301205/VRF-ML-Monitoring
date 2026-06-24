@@ -110,6 +110,7 @@ export default function ProtocolStream({ API, serial, onIngest }) {
   const [filter,      setFilter]      = useState("ALL");
   const [search,      setSearch]      = useState("");
   const [copied,      setCopied]      = useState(null);
+  const [page,        setPage]        = useState(1);
   const prevDataId = useRef(null);
   const fieldsForId = useRef(null);
 
@@ -443,14 +444,14 @@ export default function ProtocolStream({ API, serial, onIngest }) {
               </span>
             )}
           </div>
-          <div style={{ padding:"12px 14px", overflowY:"auto", maxHeight:200 }}>
+          <div style={{ padding:"12px 14px", overflowY:"auto", maxHeight:"400px", paddingRight:"8px" }}>
             {decodedFields.length === 0 ? (
               <div style={{ padding:24, color:"#999", fontSize:12, textAlign:"center" }}>
                 No decoded fields yet — parse a frame above to see results here
               </div>
             ) : (
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(280px, 1fr))", gap:10 }}>
-                {decodedFields.slice(0, 50).map((field, index) => {
+                {decodedFields.slice((page-1)*100, page*100).map((field, index) => {
                   const frameLabel = field.frame||field.frame_name||field.sheet_name||"Frame";
                   const paramName = field.parameter_name || field.field_key || "Unknown";
                   const rawVal = field.raw_value ?? "--";
@@ -513,6 +514,23 @@ export default function ProtocolStream({ API, serial, onIngest }) {
               </div>
             )}
           </div>
+          {decodedFields.length > 100 && (
+            <div style={{ padding:"10px 14px", borderTop:"1px solid #e0e3e8", display:"flex", justifyContent:"space-between", alignItems:"center", background:"#f9fafb" }}>
+              <div style={{ fontSize:11, color:"#666" }}>
+                Showing {(page-1)*100 + 1} - {Math.min(page*100, decodedFields.length)} of {decodedFields.length} fields (Total {decodedFields.reduce((acc, f) => acc + (f.length || (f.raw_value ? f.raw_value.length : 0)), 0)} bytes parsed)
+              </div>
+              <div style={{ display:"flex", gap:8 }}>
+                <button disabled={page === 1} onClick={() => setPage(p => p - 1)}
+                  style={{ padding:"4px 12px", fontSize:11, borderRadius:4, border:"1px solid #cbd0d8", background: page===1?"#f1f5f9":"#fff", cursor:page===1?"not-allowed":"pointer" }}>
+                  Previous
+                </button>
+                <button disabled={page * 100 >= decodedFields.length} onClick={() => setPage(p => p + 1)}
+                  style={{ padding:"4px 12px", fontSize:11, borderRadius:4, border:"1px solid #cbd0d8", background: page*100>=decodedFields.length?"#f1f5f9":"#fff", cursor:page*100>=decodedFields.length?"not-allowed":"pointer" }}>
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
