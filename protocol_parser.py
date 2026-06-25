@@ -513,7 +513,7 @@ def parse_incoming_payload(payload: Any, frame_name: str | None = None) -> dict:
         for frame in raw_frames
     ]
     catalog_summary = get_catalog_summary()
-    
+
     return {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "total": len(raw_frames),
